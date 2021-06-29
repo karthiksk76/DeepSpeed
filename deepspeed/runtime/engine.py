@@ -122,6 +122,7 @@ class DeepSpeedEngine(Module):
         self.block_eigenvalue = None
         self.gas_boundary_ctr = 0
         self.dist_backend = "nccl"
+        self.excluded_weights_for_sync = set()
 
         # for debug purposes - can then debug print: debug_get_module_name(module)
         debug_extract_module_and_param_names(model)
@@ -220,6 +221,10 @@ class DeepSpeedEngine(Module):
         util_ops = UtilsBuilder().load()
         self.flatten = util_ops.flatten
         self.unflatten = util_ops.unflatten
+
+        if mpu is not None and hasattr(mpu, "get_excluded_weights_for_sync"):
+            self.excluded_weights_for_sync = mpu.get_excluded_weights_for_sync(model)
+
 
     def get_batch_info(self):
         """ Get all training batch related settings.
@@ -835,6 +840,7 @@ class DeepSpeedEngine(Module):
         return quantizer
 
     def _configure_fp16_optimizer(self, optimizer):
+        #TODO(karthik): Figure out interaction of optimizer and overflow with expert parallelism.
         initial_dynamic_scale = self.initial_dynamic_scale()
         dynamic_loss_args = self.dynamic_loss_scale_args()
         clip_grad = self.gradient_clipping()
@@ -1515,7 +1521,8 @@ class DeepSpeedEngine(Module):
                 if self.sparse_gradients_enabled(
                 ) and param_name in self.csr_tensor_module_names:
                     grads.append(CSRTensor(grad_data))
-                else:
+                
+                elif not self.excluded_weights_for_sync.__contains__(param_name):
                     grads.append(grad_data)
 
         split_buckets = split_half_float_double_csr(grads)
